@@ -1,0 +1,129 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Voice — talk to her</title>
+<style>
+  :root{ --bg1:#1a1626; --bg2:#2b2140; --card:#ffffff10; --ink:#f5f0e8; --mut:#b9aec9; --acc:#f0b35e; --acc2:#e26d8d; }
+  *{box-sizing:border-box} body{margin:0;min-height:100vh;color:var(--ink);font:17px/1.5 system-ui,-apple-system,"Segoe UI",sans-serif;
+    background:radial-gradient(1200px 800px at 20% -10%,#4b3670 0%,transparent 60%),radial-gradient(1000px 700px at 110% 20%,#71354f 0%,transparent 55%),linear-gradient(180deg,var(--bg1),var(--bg2));
+    display:grid;place-items:center;padding:24px}
+  main{width:min(680px,100%);background:var(--card);border:1px solid #ffffff22;border-radius:24px;padding:28px;backdrop-filter:blur(12px);box-shadow:0 30px 80px #0008}
+  h1{margin:0 0 2px;font-size:22px;letter-spacing:.3px} p.sub{margin:0 0 18px;color:var(--mut);font-size:14px}
+  .seg{display:flex;background:#0006;border-radius:14px;padding:4px;gap:4px;margin-bottom:14px}
+  .seg button{flex:1;border:0;border-radius:10px;padding:10px;background:transparent;color:var(--mut);font-size:15px;cursor:pointer}
+  .seg button[aria-pressed="true"]{background:linear-gradient(135deg,var(--acc),var(--acc2));color:#241a12;font-weight:700}
+  textarea{width:100%;min-height:110px;resize:vertical;border-radius:16px;border:1px solid #ffffff2a;background:#00000055;color:var(--ink);
+    font-size:22px;padding:14px 16px;outline:none} textarea:focus{border-color:var(--acc)}
+  .row{display:flex;gap:10px;align-items:center;margin-top:12px;flex-wrap:wrap}
+  select,button.act{background:#ffffff14;color:var(--ink);border:1px solid #ffffff2a;border-radius:12px;padding:10px 14px;font-size:15px;cursor:pointer}
+  button.speak{background:linear-gradient(135deg,var(--acc),var(--acc2));color:#241a12;font-weight:800;border:0}
+  .status{font-size:13px;color:var(--mut);margin-top:10px;min-height:20px}
+  .said{margin-top:14px;font-size:15px;color:var(--mut);border-top:1px dashed #ffffff2a;padding-top:10px;min-height:24px}
+  .hint{font-size:12.5px;color:var(--mut);margin-top:6px}
+  kbd{background:#ffffff1c;border-radius:6px;padding:1px 7px;font-size:12.5px}
+</style>
+</head>
+<body>
+<main>
+  <h1>💬 Voice</h1>
+  <p class="sub">Type. I'll say it out loud — so you don't have to.</p>
+  <div class="seg" role="group" aria-label="Speaking mode">
+    <button id="mWord" aria-pressed="true">Say each word <small>(space)</small></button>
+    <button id="mSent" aria-pressed="false">Whole sentence <small>(enter)</small></button>
+  </div>
+  <textarea id="box" placeholder="Type here…  ( Enter speaks + clears )" autofocus autocomplete="off"></textarea>
+  <div class="row">
+    <select id="voice" aria-label="Voice">
+      <option value="af_heart" selected>Heart — warm female</option>
+      <option value="af_bella">Bella — bright female</option>
+      <option value="af_sarah">Sarah — soft female</option>
+      <option value="am_fenrir">Fenrir — warm male</option>
+      <option value="am_michael">Michael — calm male</option>
+      <option value="bm_george">George — deep male</option>
+    </select>
+    <button class="act speak" id="say">Speak ⏎</button>
+    <button class="act" id="stop">Stop</button>
+  </div>
+  <div class="status" id="status">Loading Kokoro voice… (first load downloads ~300MB, then works offline)</div>
+  <div class="said" id="said"></div>
+  <div class="hint" id="hint"><kbd>Space</kbd> speaks the word · <kbd>Enter</kbd> speaks all + clears · <kbd>Shift+Enter</kbd> new line</div>
+</main>
+<script type="module">
+import { KokoroTTS } from "https://cdn.jsdelivr.net/npm/kokoro-js@1.2.4/+esm";
+
+// ponytail: single-file app, no build step. Upgrade path: split CSS/JS + pinned voices.json if list grows past ~10.
+const $ = id => document.getElementById(id);
+const box=$('box'), status=$('status'), said=$('said'), voiceSel=$('voice');
+let mode = 'word', tts = null, ttsFailed = false, queue = [], playing = false, stopping = false;
+
+export const lastWord = s => (s.match(/(\S+)\s+$/)||[])[1] || ''; // testable pure fn
+
+async function ensureTTS(){
+  if (tts || ttsFailed) return tts;
+  try {
+    tts = await KokoroTTS.from_pretrained('onnx-community/Kokoro-82M-v1.0-ONNX', { dtype: 'q8', device: 'wasm' });
+    status.textContent = '● Kokoro ready — highest-quality open-source voice, on-device.';
+  } catch(e){ ttsFailed = true; status.textContent = '● Kokoro blocked (offline?) — using built-in device voice instead.'; }
+  return tts;
+}
+ensureTTS();
+
+async function toUrl(a){
+  if (a?.toBlob) return URL.createObjectURL(await a.toBlob());
+  const sr = a.sampling_rate || 24000;
+  const ch0 = a.audio?.[0]?.length ? a.audio[0] : (a.audio ?? a.data);
+  const n = ch0.length, buf = new Int16Array(n);
+  for (let i=0;i<n;i++) buf[i] = Math.max(-1,Math.min(1,ch0[i]))*0x7FFF;
+  const wav = new DataView(new ArrayBuffer(44+n*2));
+  const ws=(o,s)=>{for(let i=0;i<s.length;i++)wav.setUint8(o+i,s.charCodeAt(i))};
+  ws(0,'RIFF'); wav.setUint32(4,36+n*2,true); ws(8,'WAVEfmt '); wav.setUint32(16,16,true);
+  wav.setUint16(20,1,true); wav.setUint16(22,1,true); wav.setUint32(24,sr,true);
+  wav.setUint32(28,sr*2,true); wav.setUint16(32,2,true); wav.setUint16(34,16,true); ws(36,'data');
+  wav.setUint32(40,n*2,true);
+  for(let i=0;i<n;i++) wav.setInt16(44+i*2,buf[i],true);
+  return URL.createObjectURL(new Blob([wav],{type:'audio/wav'}));
+}
+const playUrl = url => new Promise((res,rej)=>{ const a=new Audio(url); a.onended=()=>{URL.revokeObjectURL(url);res()}; a.onerror=rej; a.play().catch(rej); if(stopping){a.pause();res()} stopping=false; });
+
+function speak(text){
+  text = (text||'').trim(); if(!text) return;
+  queue.push(text); pump();
+}
+async function pump(){
+  if (playing) return; playing = true;
+  while (queue.length && !stopping){
+    const t = queue.shift();
+    said.textContent = '🗣 “' + t + '”';
+    const m = await ensureTTS();
+    if (m && !ttsFailed){
+      try { const out = await m.generate(t, { voice: voiceSel.value }); await playUrl(await toUrl(out)); continue; }
+      catch(e){ ttsFailed = true; }
+    }
+    await new Promise(r=>{ const u=new SpeechSynthesisUtterance(t); u.onend=r; u.onerror=r; speechSynthesis.speak(u); }); // native fallback
+  }
+  stopping = false; playing = false;
+}
+
+box.addEventListener('input', ()=>{ if (mode!=='word') return; const w = lastWord(box.value); if (w) speak(w); });
+box.addEventListener('keydown', e=>{
+  if (e.key==='Enter' && !e.shiftKey){ e.preventDefault(); speak(box.value); box.value=''; }
+});
+$('say').onclick = ()=>{ speak(box.value); box.value=''; box.focus(); };
+$('stop').onclick = ()=>{ stopping=true; queue=[]; speechSynthesis.cancel(); try{document.querySelectorAll('audio').forEach(a=>a.pause())}catch(e){} };
+const setMode = m => { mode=m; $('mWord').setAttribute('aria-pressed',m==='word'); $('mSent').setAttribute('aria-pressed',m==='sent');
+  $('hint').innerHTML = m==='word' ? '<kbd>Space</kbd> speaks the word · <kbd>Enter</kbd> speaks all + clears · <kbd>Shift+Enter</kbd> new line'
+                                   : '<kbd>Enter</kbd> speaks the whole message + clears · <kbd>Shift+Enter</kbd> new line'; box.focus(); };
+$('mWord').onclick = ()=>setMode('word'); $('mSent').onclick = ()=>setMode('sent');
+
+if (location.hash === '#selftest'){ // ONE runnable check: open index.html#selftest, read console
+  console.assert(lastWord('hello ') === 'hello', 'word');
+  console.assert(lastWord('say hello world  ') === 'world', 'last word');
+  console.assert(lastWord('typing') === '', 'incomplete word silent');
+  console.assert(lastWord('') === '', 'empty');
+  console.log('selftest done — no assertion failures = pass');
+}
+</script>
+</body>
+</html>
