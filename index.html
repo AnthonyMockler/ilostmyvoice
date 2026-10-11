@@ -96,7 +96,13 @@ async function toUrl(a){
 }
 const playUrl = url => new Promise((res,rej)=>{ const a=new Audio(url); a.onended=()=>{URL.revokeObjectURL(url);res()}; a.onerror=rej; a.play().catch(rej); if(stopping){a.pause();res()} stopping=false; });
 
-const native = t => new Promise(r=>{ const u=new SpeechSynthesisUtterance(t); u.onend=r; u.onerror=r; speechSynthesis.speak(u); });
+let natVoices = [];
+const loadNat = () => { try { natVoices = speechSynthesis.getVoices(); } catch(e){} };
+loadNat(); try { speechSynthesis.onvoiceschanged = loadNat; } catch(e){}
+// ponytail: gender-guess by voice name; no std API for gender. Upgrade: manual voice list if names misfire.
+export const natPick = (vs, v) => { const f = (v||'')[1] === 'f', en = (vs||[]).filter(x => (x.lang||'').startsWith('en'));
+  return en.find(x => f ? /female|samantha|zira|karen|moira|tessa|fiona|veena|google us english/i.test(x.name||'') : /male|daniel|david|fred|alex|thomas/i.test(x.name||'')) || en[0] || null; };
+const native = t => new Promise(r=>{ const u=new SpeechSynthesisUtterance(t); try{ u.voice = natPick(natVoices, voiceSel.value); }catch(e){} u.onend=r; u.onerror=r; speechSynthesis.speak(u); });
 function stopAll(){ stopping=true; queue=[]; try{speechSynthesis.cancel()}catch(e){} try{document.querySelectorAll('audio').forEach(a=>{a.pause();a.remove()})}catch(e){} stopping=false; }
 function speak(text){
   text = (text||'').trim(); if(!text) return;
@@ -131,6 +137,8 @@ if (location.hash === '#selftest'){ // ONE runnable check: open index.html#selft
   console.assert(lastWord('say hello world  ') === 'world', 'last word');
   console.assert(lastWord('typing') === '', 'incomplete word silent');
   console.assert(lastWord('') === '', 'empty');
+  console.assert(natPick([{name:'Samantha',lang:'en-US'},{name:'Daniel',lang:'en-GB'}],'af_heart').name === 'Samantha', 'fem pick');
+  console.assert(natPick([{name:'Samantha',lang:'en-US'},{name:'Daniel',lang:'en-GB'}],'am_fenrir').name === 'Daniel', 'male pick');
   console.log('selftest done — no assertion failures = pass');
 }
 </script>
