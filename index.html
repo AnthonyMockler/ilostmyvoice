@@ -46,7 +46,7 @@
     <button class="act speak" id="say">Speak ⏎</button>
     <button class="act" id="stop">Stop</button>
   </div>
-  <div class="status" id="status">Loading Kokoro voice… (first load downloads ~300MB, then works offline)</div>
+  <div class="status" id="status">Checking for fast local voice…</div>
   <div class="said" id="said"></div>
   <div class="hint" id="hint"><kbd>Space</kbd> speaks the word · <kbd>Enter</kbd> speaks all + clears · <kbd>Shift+Enter</kbd> new line</div>
 </main>
@@ -110,6 +110,7 @@ function speak(text){
   text = (text||'').trim(); if(!text) return;
   said.textContent = '🗣 “' + text + '”';
   stopAll(); // never queue: latest utterance wins, no backlog
+  if (localReady){ queue.push(...chunk(text)); pumpLocal(); return; } // local: stream clauses, first plays while rest synthesizes
   if (mode === 'word' || ttsFailed){ native(text); return; } // word mode = instant device voice (~0ms)
   queue.push(text); pump(); // sentence mode = Kokoro quality (~1.5s)
 }
@@ -119,6 +120,28 @@ async function pump(){
     const t = queue.shift();
     try { const out = await (await ensureTTS()).generate(t, { voice: voiceSel.value }); await playUrl(await toUrl(out)); }
     catch(e){ ttsFailed = true; native(t); }
+  }
+  playing = false;
+}
+// ponytail: local server first (realtime), browser Kokoro fallback, native last. Upgrade: streaming audio chunks if latency still matters.
+let localReady = false;
+(async () => { try { const r = await fetch('http://127.0.0.1:8765/', { signal: AbortSignal.timeout(1500) });
+  if (r.ok){ localReady = true; status.textContent = '● Fast local voice ready — realtime, on-device.'; } } catch(e){} })();
+export const chunk = s => (s.match(/[^.!?,;\n]+[.!?,;\n]*/g)||[s]).map(x=>x.trim()).filter(Boolean)
+  .flatMap(c => c.length <= 60 ? [c] : (c.match(/\S+(?:\s+\S+){0,5}/g) || [c])); // clauses, long ones split to ~6 words
+const fetchWav = (t, v) => fetch('http://127.0.0.1:8765/say', { method: 'POST',
+  headers: {'Content-Type': 'application/json'}, body: JSON.stringify({ text: t, voice: v }) })
+  .then(r => { if (!r.ok || stopping) throw 0; return r.blob(); }).then(URL.createObjectURL.bind(URL));
+async function pumpLocal(){
+  if (playing) return; playing = true;
+  let upcoming = null;
+  while (queue.length && !stopping){
+    const t = queue.shift(), v = voiceSel.value;
+    if (!localReady){ await native(t); continue; } // server died mid-stream: native for the rest
+    const curP = upcoming || fetchWav(t, v);
+    upcoming = queue.length ? fetchWav(queue[0], voiceSel.value) : null; // prefetch next while current plays
+    try { const url = await curP; if (stopping){ URL.revokeObjectURL(url); break; } await playUrl(url); }
+    catch(e){ upcoming = null; localReady = false; await native(t); }
   }
   playing = false;
 }
@@ -141,6 +164,8 @@ if (location.hash === '#selftest'){ // ONE runnable check: open index.html#selft
   console.assert(lastWord('') === '', 'empty');
   console.assert(natPick([{name:'Samantha',lang:'en-US'},{name:'Daniel',lang:'en-GB'}],'af_heart').name === 'Samantha', 'fem pick');
   console.assert(natPick([{name:'Samantha',lang:'en-US'},{name:'Daniel',lang:'en-GB'}],'am_fenrir').name === 'Daniel', 'male pick');
+  console.assert(JSON.stringify(chunk('Hi there. How are you?')) === '["Hi there.","How are you?"]', 'clauses');
+  console.assert(chunk('hello')[0] === 'hello', 'single word');
   console.log('selftest done — no assertion failures = pass');
 }
 </script>
