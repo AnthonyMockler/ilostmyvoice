@@ -66,10 +66,13 @@ async function ensureTTS(){
   try {
     if (!KokoroTTS) ({ KokoroTTS } = await import('https://cdn.jsdelivr.net/npm/kokoro-js@1.2.1/+esm'));
     status.textContent = '● Downloading Kokoro voice… 0% (you can already talk — built-in voice until ready)';
-    tts = await KokoroTTS.from_pretrained('onnx-community/Kokoro-82M-v1.0-ONNX', { dtype: 'q8', device: 'wasm',
-      progress_callback: o => { if (o?.progress != null) status.textContent =
-        `● Downloading Kokoro voice… ${Math.round(o.progress)}% (you can already talk — built-in voice until ready)`; } });
+    const prog = o => { if (o?.progress != null) status.textContent =
+      `● Downloading Kokoro voice… ${Math.round(o.progress)}% (you can already talk — built-in voice until ready)`; };
+    const cfg = navigator.gpu ? { dtype: 'fp32', device: 'webgpu', progress_callback: prog } // ~4x faster
+                              : { dtype: 'q8', device: 'wasm', progress_callback: prog };
+    tts = await KokoroTTS.from_pretrained('onnx-community/Kokoro-82M-v1.0-ONNX', cfg);
     status.textContent = '● Kokoro ready — highest-quality open-source voice, on-device.';
+    tts.generate('Ready.', { voice: 'af_heart' }).catch(()=>{}); // warmup: compile shaders now, not on first sentence
   } catch(e){ ttsFailed = true; status.textContent = '● Kokoro blocked (offline?) — using built-in device voice instead.'; }
   return tts;
 }
@@ -93,23 +96,23 @@ async function toUrl(a){
 }
 const playUrl = url => new Promise((res,rej)=>{ const a=new Audio(url); a.onended=()=>{URL.revokeObjectURL(url);res()}; a.onerror=rej; a.play().catch(rej); if(stopping){a.pause();res()} stopping=false; });
 
+const native = t => new Promise(r=>{ const u=new SpeechSynthesisUtterance(t); u.onend=r; u.onerror=r; speechSynthesis.speak(u); });
+function stopAll(){ stopping=true; queue=[]; try{speechSynthesis.cancel()}catch(e){} try{document.querySelectorAll('audio').forEach(a=>{a.pause();a.remove()})}catch(e){} stopping=false; }
 function speak(text){
   text = (text||'').trim(); if(!text) return;
-  queue.push(text); pump();
+  said.textContent = '🗣 “' + text + '”';
+  stopAll(); // never queue: latest utterance wins, no backlog
+  if (mode === 'word' || ttsFailed){ native(text); return; } // word mode = instant device voice (~0ms)
+  queue.push(text); pump(); // sentence mode = Kokoro quality (~1.5s)
 }
 async function pump(){
   if (playing) return; playing = true;
   while (queue.length && !stopping){
     const t = queue.shift();
-    said.textContent = '🗣 “' + t + '”';
-    const m = await ensureTTS();
-    if (m && !ttsFailed){
-      try { const out = await m.generate(t, { voice: voiceSel.value }); await playUrl(await toUrl(out)); continue; }
-      catch(e){ ttsFailed = true; }
-    }
-    await new Promise(r=>{ const u=new SpeechSynthesisUtterance(t); u.onend=r; u.onerror=r; speechSynthesis.speak(u); }); // native fallback
+    try { const out = await (await ensureTTS()).generate(t, { voice: voiceSel.value }); await playUrl(await toUrl(out)); }
+    catch(e){ ttsFailed = true; native(t); }
   }
-  stopping = false; playing = false;
+  playing = false;
 }
 
 box.addEventListener('input', ()=>{ if (mode!=='word') return; const w = lastWord(box.value); if (w) speak(w); });
@@ -117,7 +120,7 @@ box.addEventListener('keydown', e=>{
   if (e.key==='Enter' && !e.shiftKey){ e.preventDefault(); speak(box.value); box.value=''; }
 });
 $('say').onclick = ()=>{ speak(box.value); box.value=''; box.focus(); };
-$('stop').onclick = ()=>{ stopping=true; queue=[]; speechSynthesis.cancel(); try{document.querySelectorAll('audio').forEach(a=>a.pause())}catch(e){} };
+$('stop').onclick = ()=>{ stopAll(); };
 const setMode = m => { mode=m; $('mWord').setAttribute('aria-pressed',m==='word'); $('mSent').setAttribute('aria-pressed',m==='sent');
   $('hint').innerHTML = m==='word' ? '<kbd>Space</kbd> speaks the word · <kbd>Enter</kbd> speaks all + clears · <kbd>Shift+Enter</kbd> new line'
                                    : '<kbd>Enter</kbd> speaks the whole message + clears · <kbd>Shift+Enter</kbd> new line'; box.focus(); };
