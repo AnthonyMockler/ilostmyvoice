@@ -65,12 +65,16 @@ async function ensureTTS(){
   if (tts || ttsFailed) return tts;
   try {
     if (!KokoroTTS) ({ KokoroTTS } = await import('https://cdn.jsdelivr.net/npm/kokoro-js@1.2.1/+esm'));
-    tts = await KokoroTTS.from_pretrained('onnx-community/Kokoro-82M-v1.0-ONNX', { dtype: 'q8', device: 'wasm' });
+    status.textContent = '● Downloading Kokoro voice… 0% (you can already talk — built-in voice until ready)';
+    tts = await KokoroTTS.from_pretrained('onnx-community/Kokoro-82M-v1.0-ONNX', { dtype: 'q8', device: 'wasm',
+      progress_callback: o => { if (o?.progress != null) status.textContent =
+        `● Downloading Kokoro voice… ${Math.round(o.progress)}% (you can already talk — built-in voice until ready)`; } });
     status.textContent = '● Kokoro ready — highest-quality open-source voice, on-device.';
   } catch(e){ ttsFailed = true; status.textContent = '● Kokoro blocked (offline?) — using built-in device voice instead.'; }
   return tts;
 }
 ensureTTS();
+if (!('speechSynthesis' in window)) status.textContent = '● No speech support in this browser — try Chrome or Edge.';
 
 async function toUrl(a){
   if (a?.toBlob) return URL.createObjectURL(await a.toBlob());
