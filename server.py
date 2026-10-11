@@ -4,6 +4,7 @@ from http.server import BaseHTTPRequestHandler, HTTPServer
 from pathlib import Path
 
 import sherpa_onnx
+import numpy as np
 
 D = Path('/tmp/kokoro-en-v0_19')
 SID = {'af_heart': 0, 'af_bella': 1, 'af_sarah': 3, 'af_sky': 4,
@@ -23,7 +24,6 @@ def synth(text, voice):
     buf = io.BytesIO()
     with wave.open(buf, 'wb') as w:
         w.setnchannels(1); w.setsampwidth(2); w.setframerate(a.sample_rate)
-        import numpy as np
         w.writeframes((np.array(a.samples) * 32767).astype('<i2').tobytes())
     return buf.getvalue()
 
