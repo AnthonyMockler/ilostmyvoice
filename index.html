@@ -100,9 +100,11 @@ let natVoices = [];
 const loadNat = () => { try { natVoices = speechSynthesis.getVoices(); } catch(e){} };
 loadNat(); try { speechSynthesis.onvoiceschanged = loadNat; } catch(e){}
 // ponytail: gender-guess by voice name; no std API for gender. Upgrade: manual voice list if names misfire.
+const F=/female|samantha|zira|karen|moira|tessa|fiona|veena|google us english/i, M=/male|daniel|david|fred|alex|thomas/i;
 export const natPick = (vs, v) => { const f = (v||'')[1] === 'f', en = (vs||[]).filter(x => (x.lang||'').startsWith('en'));
-  return en.find(x => f ? /female|samantha|zira|karen|moira|tessa|fiona|veena|google us english/i.test(x.name||'') : /male|daniel|david|fred|alex|thomas/i.test(x.name||'')) || en[0] || null; };
-const native = t => new Promise(r=>{ const u=new SpeechSynthesisUtterance(t); try{ u.voice = natPick(natVoices, voiceSel.value); }catch(e){} u.onend=r; u.onerror=r; speechSynthesis.speak(u); });
+  return en.find(x => (f?F:M).test(x.name||'')) || en[f ? 0 : en.length - 1] || null; };
+export const natPitch = (n, v) => { const f = (v||'')[1] === 'f'; return (f?F:M).test(n||'') ? 1 : f ? 1.25 : 0.75; }; // shift pitch only when fallback voice mismatches gender
+const native = t => new Promise(r=>{ const u=new SpeechSynthesisUtterance(t); try{ loadNat(); u.voice=natPick(natVoices,voiceSel.value); u.pitch=natPitch(u.voice?.name,voiceSel.value); }catch(e){} u.onend=r; u.onerror=r; speechSynthesis.speak(u); });
 function stopAll(){ stopping=true; queue=[]; try{speechSynthesis.cancel()}catch(e){} try{document.querySelectorAll('audio').forEach(a=>{a.pause();a.remove()})}catch(e){} stopping=false; }
 function speak(text){
   text = (text||'').trim(); if(!text) return;
